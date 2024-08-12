@@ -28,3 +28,12 @@ measurements are a linear combination of atmospheric phase (according to some
 sampling of von Karman layers), actuator commands (according to some influence
 functions), and a noise vector with a specified covariance matrix.
  
+ ### Disclaimer
+ This is presently a hobby-project, so development may be slow and/or
+ unpredictable. However, if you have a change you would like to see, or a
+ feature you would like added, I encourage you to file an issue - since it's
+ likely something I haven't considered and it could prove useful to others. If
+ you make a change yourself and you think others might also find it useful,
+ please consider making a pull request so that I can include your edits in this
+ repo. If you have any other feedback, feel free to share it with me directly
+ via email: [jesse.cranney@anu.edu.au](mailto:jesse.cranney@anu.edu.au).
