@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import torch
 from pydantic import BaseModel, ConfigDict
-from pyrao import build_system_matrices
+from pyrao import build_system_matrices, ultimatestart_system_matrices
 import tqdm
 import itertools
 
@@ -19,10 +19,11 @@ class AOSystemGeneric(BaseModel):
     dpc: torch.Tensor = None
     _phi: torch.Tensor = None
     device: str = "cpu"
+    verbose: bool = True
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, matrix_builder: callable, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        matrices = build_system_matrices(verbose=False)
+        matrices = matrix_builder(verbose=self.verbose)
 
         cmp = torch.tensor(matrices.c_meas_phi, device=self.device)
         ckp = torch.tensor(matrices.c_phip1_phi, device=self.device)
@@ -84,7 +85,7 @@ class AOSystem(AOSystemGeneric):
     _meas: torch.Tensor = None
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(build_system_matrices, *args, **kwargs)
         self._com = torch.zeros(self.dmc.shape[1], device=self.device)
         self._meas = torch.zeros(self.dmc.shape[0], device=self.device)
 
@@ -114,7 +115,7 @@ class AOSystem(AOSystemGeneric):
         return (self.dpc @ self._com).reshape(self._phi_shape)
 
 
-class AOSystemSHM(AOSystemGeneric):
+class AOSystemSHMGeneric(AOSystemGeneric):
     # The SHM variant is meant to run on SHM, waiting for commands and then
     # updating measurements. The main() function is blocking, so there is no
     # useful user interaction with this class normally.
@@ -122,22 +123,34 @@ class AOSystemSHM(AOSystemGeneric):
     _meas = None
     _phi_display = None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, matrix_builder: callable, *args, **kwargs):
+        super().__init__(matrix_builder, *args, **kwargs)
         from pyMilk.interfacing.shm import SHM
         import numpy as np
+        n = "pyrao_com"
         try:
-            self._com = SHM("pyrao_com")
+            self._com = SHM(n)
+            if self._com.shape[0] != self.dmc.shape[1]:
+                self._com = SHM(n, ((self.dmc.shape[1],), np.float32))
         except FileNotFoundError:
-            self._com = SHM("pyrao_com", ((self.dmc.shape[1],), np.float32))
+            self._com = SHM(n, ((self.dmc.shape[1],), np.float32))
+
+        n = "pyrao_meas"
         try:
-            self._meas = SHM("pyrao_meas")
+            self._meas = SHM(n)
+            if self._meas.shape[0] != self.dmc.shape[0]:
+                self._meas = SHM(n, ((self.dmc.shape[0],), np.float32))
         except FileNotFoundError:
-            self._meas = SHM("pyrao_meas", ((self.dmc.shape[0],), np.float32))
+            self._meas = SHM(n, ((self.dmc.shape[0],), np.float32))
+
+        n = "pyrao_phi"
         try:
-            self._phi_display = SHM("pyrao_phi")
+            self._phi_display = SHM(n)
+            dims = zip(self._phi_display.shape, self._phi_shape)
+            if not all([a == b for a, b in dims]):
+                self._phi_display = SHM(n, (self._phi_shape, np.float32))
         except FileNotFoundError:
-            self._phi_display = SHM("pyrao_phi", (self._phi_shape, np.float32))
+            self._phi_display = SHM(n, (self._phi_shape, np.float32))
 
     def reset(self):
         super().reset()
@@ -178,3 +191,13 @@ class AOSystemSHM(AOSystemGeneric):
     def phi_cor(self):
         com = torch.tensor(self._com.get_data(), device=self.device)
         return (self.dpc @ com).reshape(self._phi_shape)
+
+
+class AOSystemSHM(AOSystemSHMGeneric):
+    def __init__(self, *args, **kwargs):
+        super().__init__(build_system_matrices, *args, **kwargs)
+
+
+class SubaruLTAO(AOSystemSHMGeneric):
+    def __init__(self, *args, **kwargs):
+        super().__init__(ultimatestart_system_matrices, *args, **kwargs)
