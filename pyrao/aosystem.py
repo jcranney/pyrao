@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import torch
 from pydantic import BaseModel, ConfigDict
-from pyrao import build_system_matrices, ultimatestart_system_matrices
+from pyrao import ultimatestart_system_matrices
 import tqdm
 import itertools
 
@@ -19,11 +19,10 @@ class AOSystemGeneric(BaseModel):
     dpc: torch.Tensor = None
     _phi: torch.Tensor = None
     device: str = "cpu"
-    verbose: bool = True
 
     def __init__(self, matrix_builder: callable, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        matrices = matrix_builder(verbose=self.verbose)
+        matrices = matrix_builder()
 
         cmp = torch.tensor(matrices.c_meas_phi, device=self.device)
         ckp = torch.tensor(matrices.c_phip1_phi, device=self.device)
@@ -84,8 +83,8 @@ class AOSystem(AOSystemGeneric):
     _com: torch.Tensor = None
     _meas: torch.Tensor = None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(build_system_matrices, *args, **kwargs)
+    def __init__(self, matrix_builder, *args, **kwargs):
+        super().__init__(matrix_builder, *args, **kwargs)
         self._com = torch.zeros(self.dmc.shape[1], device=self.device)
         self._meas = torch.zeros(self.dmc.shape[0], device=self.device)
 
@@ -191,11 +190,6 @@ class AOSystemSHMGeneric(AOSystemGeneric):
     def phi_cor(self):
         com = torch.tensor(self._com.get_data(), device=self.device)
         return (self.dpc @ com).reshape(self._phi_shape)
-
-
-class AOSystemSHM(AOSystemSHMGeneric):
-    def __init__(self, *args, **kwargs):
-        super().__init__(build_system_matrices, *args, **kwargs)
 
 
 class SubaruLTAO(AOSystemSHMGeneric):
