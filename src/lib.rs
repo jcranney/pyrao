@@ -20,289 +20,9 @@ fn pyrao(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(example_func_rust, m)?)?;
     m.add_function(wrap_pyfunction!(ultimatestart_system_matrices, m)?)?;
     m.add_function(wrap_pyfunction!(ultimatestart_recon_matrices, m)?)?;
-    m.add_function(wrap_pyfunction!(build_cpp, m)?)?;
-    m.add_function(wrap_pyfunction!(build_cpm, m)?)?;
-    m.add_function(wrap_pyfunction!(build_cmm, m)?)?;
-    m.add_function(wrap_pyfunction!(build_dpc, m)?)?;
     m.add_class::<SystemMatrices>()?;
     m.add_class::<ReconMatrices>()?;
     Ok(())
-}
-
-#[pyclass(get_all)]
-pub struct SystemMatrices {
-    pub c_phi_phi: Vec<Vec<f64>>,
-    pub c_phip1_phi: Vec<Vec<f64>>,
-    pub c_meas_phi: Vec<Vec<f64>>,
-    pub d_meas_com: Vec<Vec<f64>>,
-    pub d_phi_com: Vec<Vec<f64>>,
-}
-
-#[pyclass(get_all)]
-pub struct ReconMatrices {
-    pub c_ts_meas: Vec<Vec<f64>>,
-    pub c_meas_meas: Vec<Vec<f64>>,
-    pub d_ts_com: Vec<Vec<f64>>,
-    pub d_meas_com: Vec<Vec<f64>>,
-}
-
-
-#[pyfunction]
-fn build_cpp() -> PyResult<Vec<Vec<f64>>> {
-    const NPHISAMPLES: u32 = 32;
-    
-    /////////////
-    // define phi related coordinates:
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0, 0.0),
-        &Vec2D::new( 4.0, 0.0),
-        NPHISAMPLES,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0),
-        &Vec2D::new( 0.0,  4.0),
-        NPHISAMPLES,
-    );
-    let phi_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(move |y| {
-            x+y
-        })
-    ).flatten().collect();
-    
-    let phi: Vec<Measurement> = phi_coords
-    .iter()
-    .map(|p0|
-        Measurement::Phase{
-            line: Line::new_on_axis(p0.x,p0.y)
-        }
-    ).collect();
-    
-
-    let cov_model = VonKarmanLayer::new(0.15, 25.0, 0.0);
-    
-    let c_phi_phi = CovMat::new(&phi, &phi, &cov_model).matrix();
-    Ok(c_phi_phi)
-}
-
-#[pyfunction]
-fn build_dpc() -> PyResult<Vec<Vec<f64>>> {
-    const NPHISAMPLES: u32 = 32;
-    const NACTUX: u32 = 17;
-    
-    /////////////
-    // define phi related coordinates:
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0, 0.0),
-        &Vec2D::new( 4.0, 0.0),
-        NPHISAMPLES,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0),
-        &Vec2D::new( 0.0,  4.0),
-        NPHISAMPLES,
-    );
-    let phi_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(move |y| {
-            x+y
-        })
-    ).flatten().collect();
-    
-    let phi: Vec<Measurement> = phi_coords
-    .iter()
-    .map(|p0|
-        Measurement::Phase{
-            line: Line::new_on_axis(p0.x,p0.y)
-        }
-    ).collect();
-    
-
-    /////////////
-    // define actuator related coordinates:
-    let sf = NACTUX as f64 / (NACTUX-1) as f64;
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0*sf, 0.0),
-        &Vec2D::new( 4.0*sf, 0.0),
-        NACTUX,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0*sf),
-        &Vec2D::new( 0.0,  4.0*sf),
-        NACTUX,
-    );
-    let com_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(|y| {
-            x+y
-        }).collect::<Vec<Vec2D>>()
-    ).flatten().collect();
-    let com: Vec<Actuator> = com_coords
-    .iter()
-    .map(move |p|
-        Actuator::Gaussian{
-            position: Vec3D::new(p.x, p.y, 0.0),
-            sigma: coupling_to_sigma(0.3, 8.0/(NACTUX as f64 - 1.0)),
-        }
-    ).collect();
-
-
-    let d_phi_com = IMat::new(&phi, &com).matrix();
-    Ok(d_phi_com)
-}
-
-
-
-#[pyfunction]
-fn build_cmm() -> PyResult<Vec<Vec<f64>>> {
-    const AS2RAD: f64 = 4.848e-6;
-    const NSUBX: u32 = 16;
-    
-    /////////////
-    // define measurement related coordinates:
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0, 0.0),
-        &Vec2D::new( 4.0, 0.0),
-        NSUBX,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0),
-        &Vec2D::new( 0.0,  4.0),
-        NSUBX,
-    );
-    let meas_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(|y| {
-            x+y
-        }).collect::<Vec<Vec2D>>()
-    ).flatten().collect();
-    let wfs_dirs = vec![
-        Vec2D::new(-10.0, -10.0),
-        Vec2D::new(-10.0,  10.0),
-        Vec2D::new( 10.0,  10.0),
-        Vec2D::new( 10.0,  10.0),
-    ];
-    let meas: Vec<Measurement> = wfs_dirs.into_iter()
-    .map(|dir_arcsec|
-        dir_arcsec * AS2RAD
-    ).map(|dir|
-        meas_coords
-        .iter().map(move |p|
-            vec![
-                Measurement::SlopeTwoEdge{
-                    central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                    edge_length: 0.25,
-                    edge_separation: 0.25,
-                    gradient_axis: Vec2D::x_unit(),
-                    npoints: 2,
-                },
-                Measurement::SlopeTwoEdge{
-                    central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                    edge_length: 0.25,
-                    edge_separation: 0.25,
-                    gradient_axis: Vec2D::y_unit(),
-                    npoints: 2,
-                }
-            ]
-        ).flatten()
-    ).flatten().collect();
-
-    let cov_model = VonKarmanLayer::new(0.15, 25.0, 0.0);
-    
-    let c_phip1_meas = CovMat::new(&meas, &meas, &cov_model).matrix();
-
-    Ok(c_phip1_meas)
-}
-
-
-
-#[pyfunction]
-fn build_cpm(delta_t: f64) -> PyResult<Vec<Vec<f64>>> {
-    const AS2RAD: f64 = 4.848e-6;
-    const NPHISAMPLES: u32 = 32;
-    const NSUBX: u32 = 16;
-    
-    /////////////
-    // define phi related coordinates:
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0, 0.0),
-        &Vec2D::new( 4.0, 0.0),
-        NPHISAMPLES,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0),
-        &Vec2D::new( 0.0,  4.0),
-        NPHISAMPLES,
-    );
-    let phi_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(move |y| {
-            x+y
-        })
-    ).flatten().collect();
-    
-    let phip1: Vec<Measurement> = phi_coords
-    .iter()
-    .map(|p0|
-        Measurement::Phase{
-            line: Line::new_on_axis(p0.x+0.005*delta_t, p0.y)
-        }
-    ).collect();
-    
-    /////////////
-    // define measurement related coordinates:
-    let xx = Vec2D::linspace(
-        &Vec2D::new(-4.0, 0.0),
-        &Vec2D::new( 4.0, 0.0),
-        NSUBX,
-    );
-    let yy = Vec2D::linspace(
-        &Vec2D::new( 0.0, -4.0),
-        &Vec2D::new( 0.0,  4.0),
-        NSUBX,
-    );
-    let meas_coords: Vec<Vec2D> = xx.iter()
-    .map(|x| 
-        yy.iter().map(|y| {
-            x+y
-        }).collect::<Vec<Vec2D>>()
-    ).flatten().collect();
-    let wfs_dirs = vec![
-        Vec2D::new(-10.0, -10.0),
-        Vec2D::new(-10.0,  10.0),
-        Vec2D::new( 10.0,  10.0),
-        Vec2D::new( 10.0,  10.0),
-    ];
-    let meas: Vec<Measurement> = wfs_dirs.into_iter()
-    .map(|dir_arcsec|
-        dir_arcsec * AS2RAD
-    ).map(|dir|
-        meas_coords
-        .iter().map(move |p|
-            vec![
-                Measurement::SlopeTwoEdge{
-                    central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                    edge_length: 0.25,
-                    edge_separation: 0.25,
-                    gradient_axis: Vec2D::x_unit(),
-                    npoints: 2,
-                },
-                Measurement::SlopeTwoEdge{
-                    central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                    edge_length: 0.25,
-                    edge_separation: 0.25,
-                    gradient_axis: Vec2D::y_unit(),
-                    npoints: 2,
-                }
-            ]
-        ).flatten()
-    ).flatten().collect();
-
-    let cov_model = VonKarmanLayer::new(0.15, 25.0, 0.0);
-    
-    let c_phip1_meas = CovMat::new(&phip1, &meas, &cov_model).matrix();
-
-    Ok(c_phip1_meas)
 }
 
 struct VonKarmanLayers {
@@ -324,6 +44,8 @@ struct SystemGeom {
     ts: Vec<Measurement>,
     com: Vec<Actuator>,
     cov_model: VonKarmanLayers,
+    pupil: Pupil,
+    meas_lines: Vec<Line>,
 }
 
 impl SystemGeom {
@@ -332,7 +54,7 @@ impl SystemGeom {
         const NPHISAMPLES: u32 = 64;
         const NTSSAMPLES: u32 = 64;
         const NSUBX: u32 = 32;
-        const NACTUX: u32 = 64;
+        const NACTUX: u32 = 65;
         
         /////////////
         // define phi related coordinates:
@@ -347,11 +69,10 @@ impl SystemGeom {
             NPHISAMPLES,
         );
         let phi_coords: Vec<Vec2D> = xx.iter()
-        .map(|x|
+        .flat_map(|x|
             yy.iter().map(move |y| {
                 x+y
-            })
-        ).flatten().collect();
+            })).collect();
         
         let phi: Vec<Measurement> = phi_coords
         .iter()
@@ -382,11 +103,10 @@ impl SystemGeom {
             NTSSAMPLES,
         );
         let ts_coords: Vec<Vec2D> = xx.iter()
-        .map(|x|
+        .flat_map(|x|
             yy.iter().map(move |y| {
                 x+y
-            })
-        ).flatten().collect();
+            })).collect();
         
         let ts: Vec<Measurement> = ts_coords
         .iter()
@@ -409,61 +129,62 @@ impl SystemGeom {
             NSUBX,
         );
         let meas_coords: Vec<Vec2D> = xx.iter()
-        .map(|x| 
+        .flat_map(|x| 
             yy.iter().map(|y| {
                 x+y
-            }).collect::<Vec<Vec2D>>()
-        ).flatten().collect();
+            }).collect::<Vec<Vec2D>>()).collect();
         let wfs_dirs = vec![
             Vec2D::new(-10.0, -10.0),
             Vec2D::new(-10.0,  10.0),
             Vec2D::new( 10.0, -10.0),
             Vec2D::new( 10.0,  10.0),
         ];
-        let meas: Vec<Measurement> = wfs_dirs.into_iter()
+        let meas_lines: Vec<Line> = wfs_dirs.into_iter()
         .map(|dir_arcsec|
             dir_arcsec * AS2RAD
-        ).map(|dir|
+        ).flat_map(|dir|
             meas_coords
             .iter().map(move |p|
-                vec![
-                    Measurement::SlopeTwoEdge{
-                        central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                        edge_length: 0.25,
-                        edge_separation: 0.25,
-                        gradient_axis: Vec2D::x_unit(),
-                        npoints: 2,
-                    },
-                    Measurement::SlopeTwoEdge{
-                        central_line: Line::new(p.x, dir.x, p.y, dir.y),
-                        edge_length: 0.25,
-                        edge_separation: 0.25,
-                        gradient_axis: Vec2D::y_unit(),
-                        npoints: 2,
-                    }
-                ]
-            ).flatten()
-        ).flatten().collect();
+                Line::new(p.x, dir.x, p.y, dir.y)
+            )
+        ).collect();
+
+        let meas: Vec<Measurement> = meas_lines.iter()
+        .flat_map(|l|
+            vec![
+                Measurement::SlopeTwoEdge{
+                    central_line: l.clone(),
+                    edge_length: 0.25,
+                    edge_separation: 0.25,
+                    gradient_axis: Vec2D::x_unit(),
+                    npoints: 2,
+                },
+                Measurement::SlopeTwoEdge{
+                    central_line: l.clone(),
+                    edge_length: 0.25,
+                    edge_separation: 0.25,
+                    gradient_axis: Vec2D::y_unit(),
+                    npoints: 2,
+                }
+            ]).collect();
 
         /////////////
         // define actuator related coordinates:
-        let sf = NACTUX as f64 / (NACTUX-1) as f64;
         let xx = Vec2D::linspace(
-            &Vec2D::new(-4.0*sf, 0.0),
-            &Vec2D::new( 4.0*sf, 0.0),
+            &Vec2D::new(-4.0, 0.0),
+            &Vec2D::new( 4.0, 0.0),
             NACTUX,
         );
         let yy = Vec2D::linspace(
-            &Vec2D::new( 0.0, -4.0*sf),
-            &Vec2D::new( 0.0,  4.0*sf),
+            &Vec2D::new( 0.0, -4.0),
+            &Vec2D::new( 0.0,  4.0),
             NACTUX,
         );
         let com_coords: Vec<Vec2D> = xx.iter()
-        .map(|x| 
+        .flat_map(|x| 
             yy.iter().map(|y| {
                 x+y
-            }).collect::<Vec<Vec2D>>()
-        ).flatten().collect();
+            }).collect::<Vec<Vec2D>>()).collect();
         let com: Vec<Actuator> = com_coords
         .iter()
         .map(move |p|
@@ -480,6 +201,18 @@ impl SystemGeom {
             ]
         };
 
+        let pupil = Pupil {
+            rad_outer: 4.1,
+            rad_inner: 1.2,
+            spider_thickness: 0.2,
+            spiders: vec![
+                (Vec2D::new(0.0,1.2), Vec2D::new(4.0,-4.0)),
+                (Vec2D::new(0.0,1.2), Vec2D::new(-4.0,-4.0)),
+                (Vec2D::new(0.0,-1.2), Vec2D::new(4.0,4.0)),
+                (Vec2D::new(0.0,-1.2), Vec2D::new(-4.0,4.0)),
+            ]
+        };
+
         SystemGeom {
             meas,
             phi,
@@ -487,8 +220,19 @@ impl SystemGeom {
             ts,
             com,
             cov_model,
+            pupil,
+            meas_lines,
         }
     }
+}
+
+#[pyclass(get_all)]
+pub struct ReconMatrices {
+    pub c_ts_meas: Vec<Vec<f64>>,
+    pub c_meas_meas: Vec<Vec<f64>>,
+    pub d_ts_com: Vec<Vec<f64>>,
+    pub d_meas_com: Vec<Vec<f64>>,
+    pub p_meas: Vec<f64>,
 }
 
 impl ReconMatrices {
@@ -511,13 +255,33 @@ impl ReconMatrices {
             &system_geom.ts,
             &system_geom.com
         ).matrix();
+        let p_meas = IMat::new(
+            &system_geom.meas_lines.into_iter().flat_map(|ell|
+            vec![
+                Measurement::Phase { line: ell.clone() },
+                Measurement::Phase { line: ell },
+            ]).collect::<Vec<Measurement>>(),
+            &[system_geom.pupil],
+        ).flattened_array();
         ReconMatrices {
             c_meas_meas,
             c_ts_meas,
             d_ts_com,
             d_meas_com,
+            p_meas,
         }
     }
+}
+
+#[pyclass(get_all)]
+pub struct SystemMatrices {
+    pub c_phi_phi: Vec<Vec<f64>>,
+    pub c_phip1_phi: Vec<Vec<f64>>,
+    pub c_meas_phi: Vec<Vec<f64>>,
+    pub d_meas_com: Vec<Vec<f64>>,
+    pub d_phi_com: Vec<Vec<f64>>,
+    pub p_phi: Vec<f64>,
+    pub p_meas: Vec<f64>,
 }
 
 impl SystemMatrices {
@@ -545,12 +309,27 @@ impl SystemMatrices {
             &system_geom.phi,
             &system_geom.com
         ).matrix();
+        let pup = vec![system_geom.pupil];
+        let p_phi = IMat::new(
+            &system_geom.phi,
+            &pup,
+        ).flattened_array();
+        let p_meas = IMat::new(
+            &system_geom.meas_lines.into_iter().flat_map(|ell|
+            vec![
+                Measurement::Phase { line: ell.clone() },
+                Measurement::Phase { line: ell },
+            ]).collect::<Vec<Measurement>>(),
+            &pup,
+        ).flattened_array();
         SystemMatrices {
             c_phi_phi,
             c_phip1_phi,
             c_meas_phi,
             d_meas_com,
             d_phi_com,
+            p_phi,
+            p_meas,
         }
     }
 }

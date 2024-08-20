@@ -9,7 +9,7 @@ import itertools
 class AOSystemGeneric(BaseModel):
     # The generic variant of this class only initialises the minimal matrices
     # and doesn't provide any user-level API except for step and reset.
-    # Also, this classes init method does not 
+    # Also, this classes init method does not
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cvv_factor: torch.Tensor = None
     cpp_factor: torch.Tensor = None
@@ -17,8 +17,12 @@ class AOSystemGeneric(BaseModel):
     dmp: torch.Tensor = None
     dmc: torch.Tensor = None
     dpc: torch.Tensor = None
+    _pm: torch.Tensor = None  # pupil masking vector for meas samples
     _phi: torch.Tensor = None
+    pupil: torch.Tensor = None  # pupil masking vector for phase samples
     device: str = "cpu"
+    noise: bool = False
+    noise_sigma: float = 10.0
 
     def __init__(self, matrix_builder: callable, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -37,6 +41,11 @@ class AOSystemGeneric(BaseModel):
         self.dmp = torch.linalg.solve_ex(cpp, cmp, left=False)[0]
         self._phi_shape = (int(cpp.shape[0]**0.5),)*2
         self._phi = self._randmult(self.cpp_factor)
+        self.pupil = (torch.tensor(
+            matrices.p_phi,
+            device=self.device,
+        ).reshape(self._phi_shape) > 0.5)
+        self._pm = torch.tensor(matrices.p_meas, device=self.device)
 
     def reset(self):
         self._phi[:] = 0.0
@@ -48,13 +57,17 @@ class AOSystemGeneric(BaseModel):
             self.dkp,
             self._phi,
         ) + self._randmult(self.cvv_factor)
+        self._phi[:] -= self._phi[:].mean()
 
     def _randmult(self, mat: torch.Tensor):
         return torch.einsum(
             "ij,j->i",
             mat,
-            torch.randn([mat.shape[1]], device=self.device)
+            self._randvec(mat.shape[1])
         )
+
+    def _randvec(self, length):
+        return torch.randn([length], device=self.device)
 
     @property
     def phi_atm(self):
@@ -66,7 +79,7 @@ class AOSystemGeneric(BaseModel):
 
     @property
     def phi_res(self):
-        return self.phi_atm + self.phi_cor
+        return (self.phi_atm + self.phi_cor)*self.pupil
 
     @property
     def perf(self):
@@ -104,6 +117,11 @@ class AOSystem(AOSystemGeneric):
             self.dmc,
             self._com,
         )
+        if self.noise:
+            self._meas[:] *= self._pm
+            self._meas[:] += self.noise_sigma*(
+                self._randvec(self._meas.shape[0])
+            )
         return self._meas
 
     def set_command(self, com):
@@ -114,7 +132,7 @@ class AOSystem(AOSystemGeneric):
         return (self.dpc @ self._com).reshape(self._phi_shape)
 
 
-class AOSystemSHMGeneric(AOSystemGeneric):
+class AOSystemSHM(AOSystemGeneric):
     # The SHM variant is meant to run on SHM, waiting for commands and then
     # updating measurements. The main() function is blocking, so there is no
     # useful user interaction with this class normally.
@@ -162,8 +180,8 @@ class AOSystemSHMGeneric(AOSystemGeneric):
             self._com.get_data(check=blocking),
             device=self.device
         )
-        self._meas.set_data(
-            (torch.einsum(
+        meas = (
+            torch.einsum(
                 "ij,j->i",
                 self.dmp,
                 self._phi,
@@ -171,11 +189,20 @@ class AOSystemSHMGeneric(AOSystemGeneric):
                 "ij,j->i",
                 self.dmc,
                 com,
-            )).cpu().numpy()
+            )
         )
+        if self.noise:
+            meas[:] *= self._pm
+            meas[:] += self.noise_sigma*(
+                self._randvec(self._meas.shape[0])
+            )
+        self._meas.set_data(meas.cpu().numpy())
 
     def update_displays(self):
-        self._phi_display.set_data(self.phi_res.cpu().numpy())
+        phi_res = self.phi_res
+        phi_res[self.pupil] -= phi_res[self.pupil].mean()
+        phi_res[~self.pupil] = 0.0
+        self._phi_display.set_data(phi_res.cpu().numpy())
 
     def main(self, niter=None, blocking=False):
         if niter:
@@ -192,6 +219,6 @@ class AOSystemSHMGeneric(AOSystemGeneric):
         return (self.dpc @ com).reshape(self._phi_shape)
 
 
-class SubaruLTAO(AOSystemSHMGeneric):
+class SubaruLTAO(AOSystemSHM):
     def __init__(self, *args, **kwargs):
         super().__init__(ultimatestart_system_matrices, *args, **kwargs)
