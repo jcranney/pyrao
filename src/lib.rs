@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rao::*;
 
+const AS2RAD: f64 = 4.848e-6;
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn pyrao(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -13,6 +15,7 @@ fn pyrao(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+#[derive(Debug,Clone)]
 struct VonKarmanLayers {
     layers: Vec<VonKarmanLayer>
 }
@@ -26,36 +29,35 @@ impl CoSampleable for VonKarmanLayers {
 }
 
 #[pyclass]
+#[derive(Clone)]
 struct SystemGeom {
     meas: Vec<Measurement>,
     phi: Vec<Measurement>,
-    phip1: Option<Vec<Measurement>>,
+    phip1: Vec<Measurement>,
     ts: Vec<Measurement>,
     com: Vec<Actuator>,
-    cov_model: VonKarmanLayers,
-    pupil: Pupil,
+    cov_model: Vec<VonKarmanLayer>,
+    pupil: Option<Pupil>,
     meas_lines: Vec<Line>,
 }
 
 #[pymethods]
 impl SystemGeom {
     #[staticmethod]
-    fn new(
-        teldiam: f64,  // diameter of telescope in metres
-        cobs: f64,  // central obscuration, fraction of diameter
-        r0: f64,  // seeing (metres)
-        coupling: f64,  // coupling between DM actuators
-        nactux: u32,  // number of actuators across DM diameter
-        dmalt: f64,  // dm altitude in metres
-        pitch: f64,  // dm pitch in metres
-        nsubx: u32,  // number of subapertures across WFS pupil
-        ntssamples: u32,  // number of samples across TS pupil
-        nphisamples: u32,  // number of phase samples across pupil,
-        wfs_dirs: Vec<(f64, f64)>,  // directions of WFSs (arcsec)
-        dm_delta: (f64, f64),  // dm position offset
-    ) -> Self {
-        const AS2RAD: f64 = 4.848e-6;
+    fn new_empty() -> Self {
+        Self { 
+            meas: vec![],
+            phi: vec![],
+            phip1: vec![],
+            ts: vec![],
+            com: vec![],
+            cov_model: vec![],
+            pupil: None,
+            meas_lines: vec![],
+        }
+    }
 
+    fn add_phi(&mut self, teldiam: f64, nphisamples: u32) {
         /////////////
         // define phi related coordinates:
         let xx = Vec2D::linspread(
@@ -74,7 +76,7 @@ impl SystemGeom {
                 x+y
             })).collect();
         
-        let phi: Vec<rao::Measurement> = phi_coords
+        let mut phi: Vec<rao::Measurement> = phi_coords
         .iter()
         .map(|p0|
             rao::Measurement::Phase{
@@ -82,14 +84,18 @@ impl SystemGeom {
             }
         ).collect();
         
+        self.phi.append(&mut phi);
+    }
+
+    fn add_ts(&mut self, teldiam: f64, ntssamples: u32, ts_dirs: Vec<(f64, f64)>) {
         /////////////
         // define truth sensor related coordinates:
-        let xx = Vec2D::linspread(
+        let xx = Vec2D::linspace(
             &Vec2D::new(-teldiam*0.5, 0.0),
             &Vec2D::new( teldiam*0.5, 0.0),
             ntssamples,
         );
-        let yy = Vec2D::linspread(
+        let yy = Vec2D::linspace(
             &Vec2D::new( 0.0, -teldiam*0.5),
             &Vec2D::new( 0.0,  teldiam*0.5),
             ntssamples,
@@ -100,14 +106,19 @@ impl SystemGeom {
                 x+y
             })).collect();
         
-        let ts: Vec<rao::Measurement> = ts_coords
-        .iter()
-        .map(|p0|
-            rao::Measurement::Phase{
-                line: Line::new_on_axis(p0.x,p0.y)
-            }
-        ).collect();
-        
+        let mut ts: Vec<Measurement> = ts_dirs.into_iter().map(|(x_as,y_as)|
+            ts_coords
+            .iter()
+            .map(move |p0|
+                rao::Measurement::Phase{
+                    line: Line::new(p0.x, x_as*AS2RAD, p0.y, y_as*AS2RAD)
+                }
+            )
+        ).flatten().collect();
+        self.ts.append(&mut ts);
+    }
+    
+    fn add_meas(&mut self, teldiam: f64, nsubx: u32, wfs_dirs: Vec<(f64, f64)>, gsalt: f64) {
         /////////////
         // define rao::Measurement related coordinates:
         let xx = Vec2D::linspread(
@@ -129,7 +140,7 @@ impl SystemGeom {
             Vec2D::new(x, y)
         ).collect();
 
-        let meas: Vec<rao::Measurement> = _wfs_dirs.iter().map(|dir_arcsec|
+        let mut meas: Vec<rao::Measurement> = _wfs_dirs.iter().map(|dir_arcsec|
             dir_arcsec * AS2RAD
         ).flat_map(|dir|
             vec![
@@ -140,7 +151,8 @@ impl SystemGeom {
                         edge_length: teldiam / nsubx as f64,
                         edge_separation: teldiam / nsubx as f64,
                         gradient_axis: Vec2D::y_unit(),
-                        npoints: 2,
+                        npoints: 1,
+                        altitude: gsalt,
                     }
                 }).collect::<Vec<rao::Measurement>>(),
                 meas_coords.iter().map(move |p| {
@@ -150,13 +162,14 @@ impl SystemGeom {
                         edge_length: teldiam / nsubx as f64,
                         edge_separation: teldiam / nsubx as f64,
                         gradient_axis: Vec2D::x_unit(),
-                        npoints: 2,
+                        npoints: 1,
+                        altitude: gsalt,
                     }
                 }).collect::<Vec<rao::Measurement>>(),
             ]
         ).flatten().collect();
 
-        let meas_lines = meas.iter().map(|m|
+        let mut meas_lines = meas.iter().map(|m|
             match m {
                 rao::Measurement::Zero => Line::new_on_axis(0.0, 0.0),
                 rao::Measurement::Phase { line } => line.clone(),
@@ -165,6 +178,11 @@ impl SystemGeom {
             }
         ).collect();
 
+        self.meas.append(&mut meas);
+        self.meas_lines.append(&mut meas_lines);
+    }
+
+    fn add_com(&mut self, pitch: f64, nactux: u32, dm_delta: (f64, f64), dmalt: f64, coupling: f64) {
         /////////////
         // define actuator related coordinates:
         let xx = Vec2D::linspace(
@@ -182,39 +200,124 @@ impl SystemGeom {
             yy.iter().map(|y| {
                 x+y
             }).collect::<Vec<Vec2D>>()).collect();
-        let com: Vec<rao::Actuator> = com_coords
+        let mut com: Vec<rao::Actuator> = com_coords
         .iter()
         .map(move |p|
             rao::Actuator::Gaussian{
                 position: Vec3D::new(p.x+dm_delta.0, p.y+dm_delta.1, dmalt),
-                sigma: rao::coupling_to_sigma(coupling, teldiam/(nactux as f64)),
+                sigma: rao::coupling_to_sigma(coupling, pitch),
             }
         ).collect();
+        self.com.append(&mut com);
+    }
+    
+    fn add_ttdm(&mut self, scale: f64) {
+        let mut com: Vec<rao::Actuator> = vec![
+            rao::Actuator::TipTilt { unit_response: Vec2D::y_unit() * scale},
+            rao::Actuator::TipTilt { unit_response: Vec2D::x_unit() * scale},
+        ];
+        self.com.append(&mut com);
+    }
 
+    fn add_cov_layer(&mut self) {
+        let mut cov_model = 
+            vec![
+                rao::VonKarmanLayer::new(0.21575883, 60.0, 0.0),
+                rao::VonKarmanLayer::new(0.76709884, 60.0, 1800.0),
+                rao::VonKarmanLayer::new(0.59536035, 60.0, 3300.0),
+                rao::VonKarmanLayer::new(1.24070137, 60.0, 5800.0),
+                rao::VonKarmanLayer::new(1.51825277, 60.0, 7400.0),
+                rao::VonKarmanLayer::new(0.75553414, 60.0, 13100.0),
+                rao::VonKarmanLayer::new(2.062782, 60.0, 15800.0),
+            ];
+        self.cov_model.append(&mut cov_model);
+    }
 
-        let cov_model = VonKarmanLayers{
-            layers: vec![
-                rao::VonKarmanLayer::new(r0, 25.0, 0.0) 
-            ]
-        };
-
+    fn set_pupil(&mut self, teldiam: f64, cobs: f64) {
         let pupil = rao::Pupil {
             rad_outer: teldiam/2.0,
             rad_inner: cobs*teldiam/2.0,
             spider_thickness: 0.0,  // TODO: add spider api
             spiders: vec![],
         };
-        
-        SystemGeom {
-            meas,
-            phi,
-            phip1: None,
-            ts,
-            com,
-            cov_model,
-            pupil,
-            meas_lines,
+        self.pupil = Some(pupil);
+    }
+
+    #[staticmethod]
+    fn new(
+        teldiam: f64,  // diameter of telescope in metres
+        cobs: f64,  // central obscuration, fraction of diameter
+        r0: f64,  // seeing (metres)
+        coupling: f64,  // coupling between DM actuators
+        nactux: u32,  // number of actuators across DM diameter
+        dmalt: f64,  // dm altitude in metres
+        pitch: f64,  // dm pitch in metres
+        nsubx: u32,  // number of subapertures across WFS pupil
+        ntssamples: u32,  // number of samples across TS pupil
+        nphisamples: u32,  // number of phase samples across pupil,
+        wfs_dirs: Vec<(f64, f64)>,  // directions of WFSs (arcsec)
+        ts_dirs: Vec<(f64, f64)>,  // directions of WFSs (arcsec)
+        dm_delta: (f64, f64),  // dm position offset
+        gsalt: f64,  // guide star altitude
+    ) -> Self {
+        let mut tmp = Self::new_empty();
+        tmp.add_com(pitch, nactux, dm_delta, dmalt, coupling);
+        tmp.add_meas(teldiam, nsubx, wfs_dirs, gsalt);
+        tmp.add_phi(teldiam, nphisamples);
+        tmp.add_cov_layer();
+        tmp.add_ts(teldiam, ntssamples, ts_dirs);
+        tmp.set_pupil(teldiam, cobs);
+        tmp
+    }
+
+    #[staticmethod]
+    fn merge_meas(systems: Vec<SystemGeom>) -> SystemGeom {
+        SystemGeom { 
+            meas: systems.iter().flat_map(|sys| sys.meas.clone()).collect(), 
+            phi: systems[0].phi.clone(),
+            phip1: systems[0].phip1.clone(),
+            ts: systems[0].ts.clone(),
+            com: systems[0].com.clone(),
+            cov_model: systems[0].cov_model.clone(),
+            pupil: systems[0].pupil.clone(),
+            meas_lines: systems.iter().flat_map(|sys| sys.meas_lines.clone()).collect(),
         }
+    }
+
+    #[staticmethod]
+    fn merge_com(systems: Vec<SystemGeom>) -> SystemGeom {
+        SystemGeom { 
+            meas: systems[0].meas.clone(),
+            phi: systems[0].phi.clone(),
+            phip1: systems[0].phip1.clone(),
+            ts: systems[0].ts.clone(),
+            com: systems.iter().flat_map(|sys| sys.com.clone()).collect(),
+            cov_model: systems[0].cov_model.clone(),
+            pupil: systems[0].pupil.clone(),
+            meas_lines: systems[0].meas_lines.clone(),
+        }
+    }
+
+    fn filter_com(&mut self, valid_com: Vec<bool>) {
+        self.com = self.com.iter()
+        .enumerate()
+        .filter(|(i, _)| valid_com[*i])
+        .map(|(_,com)| com.clone())
+        .collect();
+    }
+
+    fn filter_meas(&mut self, valid_meas: Vec<bool>) {
+        self.meas = self.meas.iter()
+        .enumerate()
+        .filter(|(i, _)| valid_meas[*i])
+        .map(|(_,meas)| meas.clone())
+        .collect();
+        self.meas_lines = self.meas_lines.iter()
+        .enumerate()
+        .filter(|(i, _)| valid_meas[*i])
+        .map(|(_,meas_lines)| meas_lines.clone())
+        .collect();
+
     }
 
     fn imat(&self) -> Vec<Vec<f64>> {
@@ -223,15 +326,27 @@ impl SystemGeom {
             &self.com
         ).matrix()
     }
+    
+    fn imat_sparse(&self, indices: Vec<(usize, usize)>) -> Vec<f64> {
+        IMat::new(
+            &self.meas,
+            &self.com
+        ).samples(indices)
+    }
 
     fn pmeas(&self) -> Vec<f64> {
-        IMat::new(
-            &self.meas_lines.iter().flat_map(|ell|
-            vec![
-                rao::Measurement::Phase { line: ell.clone() },
-            ]).collect::<Vec<rao::Measurement>>(),
-            &[self.pupil.clone()],
-        ).flattened_array()
+        match &self.pupil {
+            Some(pupil) => {
+                IMat::new(
+                    &self.meas_lines.iter().flat_map(|ell|
+                    vec![
+                        Measurement::Phase { line: ell.clone() },
+                    ]).collect::<Vec<Measurement>>(),
+                    &[pupil.clone()]
+                ).flattened_array()
+            },
+            None => (0..self.meas_lines.len()).map(|_| 1.0).collect(),
+        }
     }
 }
 
@@ -346,6 +461,7 @@ impl SystemGeom {
                     edge_separation: TELDIAM / NSUBX as f64,
                     gradient_axis: Vec2D::x_unit(),
                     npoints: 2,
+                    altitude: 90000.0,
                 },
                 rao::Measurement::SlopeTwoEdge{
                     central_line: l.clone(),
@@ -353,6 +469,7 @@ impl SystemGeom {
                     edge_separation: TELDIAM / NSUBX as f64,
                     gradient_axis: Vec2D::y_unit(),
                     npoints: 2,
+                    altitude: 90000.0,
                 }
             ]).collect();
 
@@ -383,11 +500,9 @@ impl SystemGeom {
         ).collect();
 
 
-        let cov_model = VonKarmanLayers{
-            layers: vec![
-                VonKarmanLayer::new(0.166, 25.0, 0.0)
-            ]
-        };
+        let cov_model = vec![
+            VonKarmanLayer::new(0.166, 25.0, 0.0)
+        ];
 
         let pupil = Pupil {
             rad_outer: TELDIAM/2.0,
@@ -399,11 +514,11 @@ impl SystemGeom {
         SystemGeom {
             meas,
             phi,
-            phip1: Some(phip1),
+            phip1,
             ts,
             com,
             cov_model,
-            pupil,
+            pupil: Some(pupil),
             meas_lines,
         }
     }
@@ -516,6 +631,7 @@ impl SystemGeom {
                     edge_separation: 0.25,
                     gradient_axis: Vec2D::x_unit(),
                     npoints: 2,
+                    altitude: 90000.0,
                 },
                 Measurement::SlopeTwoEdge{
                     central_line: l.clone(),
@@ -523,6 +639,7 @@ impl SystemGeom {
                     edge_separation: 0.25,
                     gradient_axis: Vec2D::y_unit(),
                     npoints: 2,
+                    altitude: 90000.0,
                 }
             ]).collect();
 
@@ -553,11 +670,9 @@ impl SystemGeom {
         ).collect();
 
 
-        let cov_model = VonKarmanLayers{
-            layers: vec![
-                VonKarmanLayer::new(0.22, 25.0, 0.0)
-            ]
-        };
+        let cov_model = vec![
+            VonKarmanLayer::new(0.22, 25.0, 0.0)
+        ];
 
         let pupil = Pupil {
             rad_outer: 4.1,
@@ -574,11 +689,11 @@ impl SystemGeom {
         SystemGeom {
             meas,
             phi,
-            phip1: Some(phip1),
+            phip1,
             ts,
             com,
             cov_model,
-            pupil,
+            pupil: Some(pupil),
             meas_lines,
         }
     }
@@ -600,12 +715,12 @@ impl ReconMatrices {
         let c_meas_meas = CovMat::new(
             &system_geom.meas,
             &system_geom.meas,
-            &system_geom.cov_model
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
         ).matrix();
         let c_ts_meas = CovMat::new(
             &system_geom.ts,
             &system_geom.meas,
-            &system_geom.cov_model
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
         ).matrix();
         let d_meas_com = IMat::new(
             &system_geom.meas,
@@ -615,14 +730,19 @@ impl ReconMatrices {
             &system_geom.ts,
             &system_geom.com
         ).matrix();
-        let p_meas = IMat::new(
-            &system_geom.meas_lines.iter().flat_map(|ell|
-            vec![
-                Measurement::Phase { line: ell.clone() },
-                Measurement::Phase { line: ell.clone() },
-            ]).collect::<Vec<Measurement>>(),
-            &[system_geom.pupil.clone()],
-        ).flattened_array();
+        let p_meas = match &system_geom.pupil {
+            Some(pupil) => {
+                IMat::new(
+                            &system_geom.meas_lines.iter().flat_map(|ell|
+                            vec![
+                                Measurement::Phase { line: ell.clone() },
+                                Measurement::Phase { line: ell.clone() },
+                            ]).collect::<Vec<Measurement>>(),
+                            &[pupil.clone()],
+                        ).flattened_array()
+            },
+            None => (0..system_geom.meas_lines.len()).map(|_| 1.0).collect(),
+        };
         ReconMatrices {
             c_meas_meas,
             c_ts_meas,
@@ -636,62 +756,102 @@ impl ReconMatrices {
 #[pyclass(get_all)]
 pub struct SystemMatrices {
     pub c_phi_phi: Vec<Vec<f64>>,
-    pub c_phip1_phi: Option<Vec<Vec<f64>>>,
+    pub c_phip1_phi: Vec<Vec<f64>>,
     pub c_meas_phi: Vec<Vec<f64>>,
+    pub c_meas_meas: Vec<Vec<f64>>,
+    pub c_ts_meas: Vec<Vec<f64>>,
     pub d_meas_com: Vec<Vec<f64>>,
     pub d_phi_com: Vec<Vec<f64>>,
+    pub d_ts_com: Vec<Vec<f64>>,
     pub p_phi: Vec<f64>,
     pub p_meas: Vec<f64>,
+    pub p_ts: Vec<f64>,
 }
 
+#[pymethods]
 impl SystemMatrices {
+    #[staticmethod]
     fn new(system_geom: SystemGeom) -> Self {
         let c_phi_phi = CovMat::new(
             &system_geom.phi,
             &system_geom.phi,
-            &system_geom.cov_model
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
         ).matrix();
-        let c_phip1_phi = system_geom.phip1.map(|phip1|
-            CovMat::new(
-                &phip1,
-                &system_geom.phi,
-                &system_geom.cov_model
-            ).matrix()
-        );
+        let c_phip1_phi = CovMat::new(
+            &system_geom.phip1,
+            &system_geom.phi,
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
+        ).matrix();
         let c_meas_phi = CovMat::new(
             &system_geom.meas,
             &system_geom.phi,
-            &system_geom.cov_model
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
+        ).matrix();
+        let c_meas_meas = CovMat::new(
+            &system_geom.meas,
+            &system_geom.meas,
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
+        ).matrix();
+        let c_ts_meas = CovMat::new(
+            &system_geom.ts,
+            &system_geom.meas,
+            &VonKarmanLayers{layers: system_geom.cov_model.clone()},
         ).matrix();
         let d_meas_com = IMat::new(
             &system_geom.meas,
+            &system_geom.com
+        ).matrix();
+        let d_ts_com = IMat::new(
+            &system_geom.ts,
             &system_geom.com
         ).matrix();
         let d_phi_com = IMat::new(
             &system_geom.phi,
             &system_geom.com
         ).matrix();
-        let pup = vec![system_geom.pupil];
-        let p_phi = IMat::new(
-            &system_geom.phi,
-            &pup,
-        ).flattened_array();
-        let p_meas = IMat::new(
-            &system_geom.meas_lines.into_iter().flat_map(|ell|
-            vec![
-                Measurement::Phase { line: ell.clone() },
-                Measurement::Phase { line: ell },
-            ]).collect::<Vec<Measurement>>(),
-            &pup,
-        ).flattened_array();
+        let p_phi = match &system_geom.pupil {
+            Some(pupil) => {
+                IMat::new(
+                    &system_geom.phi,
+                    &[pupil.clone()],
+                ).flattened_array()
+            },
+            None => (0..system_geom.phi.len()).map(|_| 1.0).collect(),
+        };
+        let p_meas = match &system_geom.pupil {
+            Some(pupil) => {
+                IMat::new(
+                    &system_geom.meas_lines.into_iter().flat_map(|ell|
+                    vec![
+                        Measurement::Phase { line: ell.clone() },
+                        Measurement::Phase { line: ell },
+                    ]).collect::<Vec<Measurement>>(),
+                    &[pupil.clone()],
+                ).flattened_array()
+            },
+            None => (0..system_geom.meas.len()).map(|_| 1.0).collect(),
+        };
+        let p_ts = match &system_geom.pupil {
+            Some(pupil) => {
+                IMat::new(
+                    &system_geom.ts,
+                    &[pupil.clone()],
+                ).flattened_array()
+            },
+            None => (0..system_geom.ts.len()).map(|_| 1.0).collect(),
+        };
         SystemMatrices {
             c_phi_phi,
             c_phip1_phi,
             c_meas_phi,
+            c_meas_meas,
+            c_ts_meas,
+            d_ts_com,
             d_meas_com,
             d_phi_com,
             p_phi,
             p_meas,
+            p_ts,
         }
     }
 }
