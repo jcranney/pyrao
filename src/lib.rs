@@ -118,7 +118,11 @@ impl SystemGeom {
         self.ts.append(&mut ts);
     }
     
-    fn add_meas(&mut self, teldiam: f64, nsubx: u32, wfs_dirs: Vec<(f64, f64)>, gsalt: f64) {
+    fn add_meas(
+        &mut self, teldiam: f64, nsubx: u32, wfs_dirs: Vec<(f64, f64)>, 
+        gsalt: f64, wfs_delta: Vec<(f64, f64)>, wfs_clocking: Vec<f64>, 
+        wfs_zoom: Vec<f64>
+    ) {
         /////////////
         // define rao::Measurement related coordinates:
         let xx = Vec2D::linspread(
@@ -140,28 +144,40 @@ impl SystemGeom {
             Vec2D::new(x, y)
         ).collect();
 
-        let mut meas: Vec<rao::Measurement> = _wfs_dirs.iter().map(|dir_arcsec|
-            dir_arcsec * AS2RAD
-        ).flat_map(|dir|
+        let mut meas: Vec<rao::Measurement> = _wfs_dirs.iter().enumerate().map(|(dir_idx, dir_arcsec)|
+            (dir_idx, dir_arcsec * AS2RAD)
+        ).flat_map(|(dir_idx, dir)|
             vec![
-                meas_coords.iter().map(move |p| {
-                    let l = Line::new(p.x, dir.x, p.y, dir.y);
+                meas_coords.iter().map(|p| {
+                    let x0: f64 = (
+                        p.x * wfs_clocking[dir_idx].cos() + p.y * wfs_clocking[dir_idx].sin()
+                    ) * (1.0 + wfs_zoom[dir_idx]) + wfs_delta[dir_idx].0;
+                    let y0: f64 = (
+                        - p.x * wfs_clocking[dir_idx].sin() + p.y * wfs_clocking[dir_idx].cos()
+                    ) * (1.0 + wfs_zoom[dir_idx]) + wfs_delta[dir_idx].1;
+                    let l = Line::new(x0, dir.x, y0, dir.y);
                     rao::Measurement::SlopeTwoEdge{
                         central_line: l.clone(),
                         edge_length: teldiam / nsubx as f64,
                         edge_separation: teldiam / nsubx as f64,
-                        gradient_axis: Vec2D::y_unit(),
+                        gradient_axis: Vec2D::new(wfs_clocking[dir_idx].sin(), wfs_clocking[dir_idx].cos()),
                         npoints: 1,
                         altitude: gsalt,
                     }
                 }).collect::<Vec<rao::Measurement>>(),
-                meas_coords.iter().map(move |p| {
-                    let l = Line::new(p.x, dir.x, p.y, dir.y);
+                meas_coords.iter().map(|p| {
+                    let x0: f64 = (
+                        p.x * wfs_clocking[dir_idx].cos() + p.y * wfs_clocking[dir_idx].sin()
+                    ) * (1.0 + wfs_zoom[dir_idx]) + wfs_delta[dir_idx].0;
+                    let y0: f64 = (
+                        - p.x * wfs_clocking[dir_idx].sin() + p.y * wfs_clocking[dir_idx].cos()
+                    ) * (1.0 + wfs_zoom[dir_idx]) + wfs_delta[dir_idx].1;
+                    let l = Line::new(x0, dir.x, y0, dir.y);
                     rao::Measurement::SlopeTwoEdge{
                         central_line: l.clone(),
                         edge_length: teldiam / nsubx as f64,
                         edge_separation: teldiam / nsubx as f64,
-                        gradient_axis: Vec2D::x_unit(),
+                        gradient_axis: Vec2D::new(wfs_clocking[dir_idx].cos(), - wfs_clocking[dir_idx].sin()),
                         npoints: 1,
                         altitude: gsalt,
                     }
@@ -182,7 +198,10 @@ impl SystemGeom {
         self.meas_lines.append(&mut meas_lines);
     }
 
-    fn add_com(&mut self, pitch: f64, nactux: u32, dm_delta: (f64, f64), dmalt: f64, coupling: f64) {
+    fn add_com(
+        &mut self, pitch: f64, nactux: u32, dm_delta: (f64, f64), dmalt: f64, 
+        coupling: f64, dm_clocking: f64, dm_zoom: f64
+    ) {
         /////////////
         // define actuator related coordinates:
         let xx = Vec2D::linspace(
@@ -202,12 +221,18 @@ impl SystemGeom {
             }).collect::<Vec<Vec2D>>()).collect();
         let mut com: Vec<rao::Actuator> = com_coords
         .iter()
-        .map(move |p|
+        .map(move |p| {
+            let x: f64 = (
+                p.x * dm_clocking.cos() + p.y * dm_clocking.sin()
+            ) * (1.0 + dm_zoom) + dm_delta.0;
+            let y: f64 = (
+                - p.x * dm_clocking.sin() + p.y * dm_clocking.cos()
+            ) * (1.0 + dm_zoom) + dm_delta.1;
             rao::Actuator::Gaussian{
-                position: Vec3D::new(p.x+dm_delta.0, p.y+dm_delta.1, dmalt),
+                position: Vec3D::new(x, y, dmalt),
                 sigma: rao::coupling_to_sigma(coupling, pitch),
             }
-        ).collect();
+        }).collect();
         self.com.append(&mut com);
     }
     
@@ -257,12 +282,17 @@ impl SystemGeom {
         nphisamples: u32,  // number of phase samples across pupil,
         wfs_dirs: Vec<(f64, f64)>,  // directions of WFSs (arcsec)
         ts_dirs: Vec<(f64, f64)>,  // directions of WFSs (arcsec)
-        dm_delta: (f64, f64),  // dm position offset
+        dm_delta: (f64, f64),  // dm position offset (metres)
+        wfs_delta: Vec<(f64, f64)>,  // wfs position offset (metres)
+        dm_clocking: f64,  // dm rotation (radians)
+        wfs_clocking: Vec<f64>,  // wfs rotation (radians)
+        dm_zoom: f64,  // dm magnification error (0.0 === unity magnification)
+        wfs_zoom: Vec<f64>,  // wfs magnification error (0.0 === unity magnification)
         gsalt: f64,  // guide star altitude
     ) -> Self {
         let mut tmp = Self::new_empty();
-        tmp.add_com(pitch, nactux, dm_delta, dmalt, coupling);
-        tmp.add_meas(teldiam, nsubx, wfs_dirs, gsalt);
+        tmp.add_com(pitch, nactux, dm_delta, dmalt, coupling, dm_clocking, dm_zoom);
+        tmp.add_meas(teldiam, nsubx, wfs_dirs, gsalt, wfs_delta, wfs_clocking, wfs_zoom);
         tmp.add_phi(teldiam, nphisamples);
         tmp.add_cov_layer();
         tmp.add_ts(teldiam, ntssamples, ts_dirs);
