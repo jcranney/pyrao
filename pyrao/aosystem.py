@@ -83,7 +83,7 @@ class AOSystemGeneric(BaseModel):
 
     @property
     def perf(self):
-        rms_wfe_rad = self.phi_res.std()
+        rms_wfe_rad = self.phi_res[self.pupil].std()
         return {
             "strehl": torch.exp(-rms_wfe_rad**2),
             "wfe":  rms_wfe_rad,
