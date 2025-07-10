@@ -9,11 +9,11 @@ name = "pyrao"
 crate-type = ["cdylib"]
 
 [dependencies]
-ndarray = "0.16.0"
-numpy = "0.21.0"
-rao = "0.1.8"
+ndarray = "0.16.1"
+numpy = "0.25.0"
+rao = "0.1.10"
 
 [dependencies.pyo3]
-version = "0.21.0"
+version = "0.25.1"
 features = ["abi3-py38"]
 
