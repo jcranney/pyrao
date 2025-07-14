@@ -35,16 +35,19 @@ class AOSystemGeneric(BaseModel):
         self.dpc = torch.tensor(matrices.d_phi_com, device=self.device)
         # these are derived products needed to run the simulation
         self.dkp = torch.linalg.solve_ex(cpp, ckp, left=False)[0]
-        _cvv = cpp-torch.einsum("ij,jk,lk->il", self.dkp, cpp, self.dkp)
+        _cvv = cpp - torch.einsum("ij,jk,lk->il", self.dkp, cpp, self.dkp)
         self.cvv_factor = torch.linalg.cholesky_ex(_cvv)[0]
         self.cpp_factor = torch.linalg.cholesky_ex(cpp)[0]
         self.dmp = torch.linalg.solve_ex(cpp, cmp, left=False)[0]
-        self._phi_shape = (int(cpp.shape[0]**0.5),)*2
+        self._phi_shape = (int(cpp.shape[0] ** 0.5),) * 2
         self._phi = self._randmult(self.cpp_factor)
-        self.pupil = (torch.tensor(
-            matrices.p_phi,
-            device=self.device,
-        ).reshape(self._phi_shape) > 0.5)
+        self.pupil = (
+            torch.tensor(
+                matrices.p_phi,
+                device=self.device,
+            ).reshape(self._phi_shape)
+            > 0.5
+        )
         self._pm = torch.tensor(matrices.p_meas, device=self.device)
 
     def reset(self):
@@ -60,11 +63,7 @@ class AOSystemGeneric(BaseModel):
         self._phi[:] -= self._phi[:].mean()
 
     def _randmult(self, mat: torch.Tensor):
-        return torch.einsum(
-            "ij,j->i",
-            mat,
-            self._randvec(mat.shape[1])
-        )
+        return torch.einsum("ij,j->i", mat, self._randvec(mat.shape[1]))
 
     def _randvec(self, length):
         return torch.randn([length], device=self.device)
@@ -79,14 +78,14 @@ class AOSystemGeneric(BaseModel):
 
     @property
     def phi_res(self):
-        return (self.phi_atm + self.phi_cor)*self.pupil
+        return (self.phi_atm + self.phi_cor) * self.pupil
 
     @property
     def perf(self):
         rms_wfe_rad = self.phi_res[self.pupil].std()
         return {
-            "strehl": torch.exp(-rms_wfe_rad**2),
-            "wfe":  rms_wfe_rad,
+            "strehl": torch.exp(-(rms_wfe_rad**2)),
+            "wfe": rms_wfe_rad,
         }
 
 
@@ -95,11 +94,19 @@ class AOSystem(AOSystemGeneric):
     # interacted with at the user-level in python.
     _com: torch.Tensor = None
     _meas: torch.Tensor = None
+    _ncpa_wfs: torch.Tensor = (
+        None  # the ncpas are always defined in command space
+    )
+    _ncpa_sci: torch.Tensor = (
+        None  # the ncpas are always defined in command space
+    )
 
     def __init__(self, matrix_builder, *args, **kwargs):
         super().__init__(matrix_builder, *args, **kwargs)
         self._com = torch.zeros(self.dmc.shape[1], device=self.device)
         self._meas = torch.zeros(self.dmc.shape[0], device=self.device)
+        self._ncpa_wfs = torch.zeros(self._com.shape, device=self.device)
+        self._ncpa_sci = torch.zeros(self._com.shape, device=self.device)
 
     def reset(self):
         super().reset()
@@ -109,17 +116,15 @@ class AOSystem(AOSystemGeneric):
     def step(self):
         super().step()
         self._meas[:] = torch.einsum(
-            "ij,j->i",
-            self.dmp,
-            self._phi,
+            "ij,j->i", self.dmp, self._phi
         ) + torch.einsum(
             "ij,j->i",
             self.dmc,
-            self._com,
+            self._com + self._ncpa_wfs,
         )
         if self.noise:
             self._meas[:] *= self._pm
-            self._meas[:] += self.noise_sigma*(
+            self._meas[:] += self.noise_sigma * (
                 self._randvec(self._meas.shape[0])
             )
         return self._meas
@@ -127,9 +132,17 @@ class AOSystem(AOSystemGeneric):
     def set_command(self, com):
         self._com[:] = com[:]
 
+    def set_ncpa_from_command(self, *, com_sci=None, com_wfs=None):
+        if com_sci is not None:
+            self._ncpa_sci = com_sci.copy()
+        if com_wfs is not None:
+            self._ncpa_wfs = com_wfs.copy()
+
     @property
     def phi_cor(self):
-        return (self.dpc @ self._com).reshape(self._phi_shape)
+        return (self.dpc @ (self._com + self._ncpa_sci)).reshape(
+            self._phi_shape
+        )
 
 
 class AOSystemSHM(AOSystemGeneric):
@@ -139,11 +152,14 @@ class AOSystemSHM(AOSystemGeneric):
     _com = None
     _meas = None
     _phi_display = None
+    _ncpa_wfs = None  # command space
+    _ncpa_sci = None  # command space
 
     def __init__(self, matrix_builder: callable, *args, **kwargs):
         super().__init__(matrix_builder, *args, **kwargs)
         from pyMilk.interfacing.shm import SHM
         import numpy as np
+
         n = "pyrao_com"
         try:
             self._com = SHM(n)
@@ -169,34 +185,49 @@ class AOSystemSHM(AOSystemGeneric):
         except FileNotFoundError:
             self._phi_display = SHM(n, (self._phi_shape, np.float32))
 
+        n = "pyrao_ncpa_wfs"
+        try:
+            self._ncpa_wfs = SHM(n)
+            dims = zip(self._ncpa_wfs.shape, self._com.shape)
+            if not all([a == b for a, b in dims]):
+                self._ncpa_wfs = SHM(n, (self._com.shape, np.float32))
+        except FileNotFoundError:
+            self._ncpa_wfs = SHM(n, (self._com.shape, np.float32))
+
+        n = "pyrao_ncpa_sci"
+        try:
+            self._ncpa_sci = SHM(n)
+            dims = zip(self._ncpa_sci.shape, self._com.shape)
+            if not all([a == b for a, b in dims]):
+                self._ncpa_sci = SHM(n, (self._com.shape, np.float32))
+        except FileNotFoundError:
+            self._ncpa_sci = SHM(n, (self._com.shape, np.float32))
+
     def reset(self):
         super().reset()
-        self._com.set_data(self._com.get_data()*0.0)
+        self._com.set_data(self._com.get_data() * 0.0)
         self.step()
 
     def step(self, blocking=False):
         super().step()
         com = torch.tensor(
-            self._com.get_data(check=blocking),
-            device=self.device
+            self._com.get_data(check=blocking), device=self.device
         )
-        meas = (
-            torch.einsum(
-                "ij,j->i",
-                self.dmp,
-                self._phi,
-            ) + torch.einsum(
-                "ij,j->i",
-                self.dmc,
-                com,
-            )
+        meas = torch.einsum("ij,j->i", self.dmp, self._phi) + torch.einsum(
+            "ij,j->i",
+            self.dmc,
+            com + self._ncpa_wfs.get_data(),
         )
         if self.noise:
             meas[:] *= self._pm
-            meas[:] += self.noise_sigma*(
-                self._randvec(self._meas.shape[0])
-            )
+            meas[:] += self.noise_sigma * (self._randvec(self._meas.shape[0]))
         self._meas.set_data(meas.cpu().numpy())
+
+    def set_ncpa_from_command(self, *, com_sci=None, com_wfs=None):
+        if com_sci is not None:
+            self._ncpa_sci.set_data((self.dpc @ com_sci).cpu().numpy())
+        if com_wfs is not None:
+            self._ncpa_wfs.set_data((self.dmc @ com_wfs).cpu().numpy())
 
     def update_displays(self):
         phi_res = self.phi_res
@@ -216,7 +247,9 @@ class AOSystemSHM(AOSystemGeneric):
     @property
     def phi_cor(self):
         com = torch.tensor(self._com.get_data(), device=self.device)
-        return (self.dpc @ com).reshape(self._phi_shape)
+        return (self.dpc @ (com + self._ncpa_sci.get_data())).reshape(
+            self._phi_shape
+        )
 
 
 class SubaruLTAO(AOSystemSHM):
