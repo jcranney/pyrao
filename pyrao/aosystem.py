@@ -23,6 +23,7 @@ class AOSystemGeneric(BaseModel):
     device: str = "cpu"
     noise: bool = False
     noise_sigma: float = 10.0
+    _phi_scale: float = 1.0
 
     def __init__(self, matrix_builder: callable, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -54,7 +55,8 @@ class AOSystemGeneric(BaseModel):
         self._phi[:] = 0.0
         self._phi += self._randmult(self.cpp_factor)
 
-    def step(self):
+    def step(self, phi_scale=1.0):
+        self._phi_scale = phi_scale
         self._phi[:] = torch.einsum(
             "ij,j->i",
             self.dkp,
@@ -69,8 +71,12 @@ class AOSystemGeneric(BaseModel):
         return torch.randn([length], device=self.device)
 
     @property
+    def phi(self):
+        return self._phi * self._phi_scale
+
+    @property
     def phi_atm(self):
-        return self._phi.reshape(self._phi_shape)
+        return self.phi.reshape(self._phi_shape)
 
     @property
     def phi_cor(self):
@@ -113,10 +119,10 @@ class AOSystem(AOSystemGeneric):
         self._com[:] = 0.0
         return self.step()  # updates internal measurement and returns it
 
-    def step(self):
-        super().step()
+    def step(self, *args, **kwargs):
+        super().step(*args, **kwargs)
         self._meas[:] = torch.einsum(
-            "ij,j->i", self.dmp, self._phi
+            "ij,j->i", self.dmp, self.phi
         ) + torch.einsum(
             "ij,j->i",
             self.dmc,
@@ -208,12 +214,12 @@ class AOSystemSHM(AOSystemGeneric):
         self._com.set_data(self._com.get_data() * 0.0)
         self.step()
 
-    def step(self, blocking=False):
-        super().step()
+    def step(self, *args, blocking=False, **kwargs):
+        super().step(*args, **kwargs)
         com = torch.tensor(
             self._com.get_data(check=blocking), device=self.device
         )
-        meas = torch.einsum("ij,j->i", self.dmp, self._phi) + torch.einsum(
+        meas = torch.einsum("ij,j->i", self.dmp, self.phi) + torch.einsum(
             "ij,j->i",
             self.dmc,
             com + self._ncpa_wfs.get_data(),

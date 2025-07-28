@@ -7,19 +7,47 @@
    simulations at real time on a modest laptop,
  - a data stream generator for developing tools based on [ImageStreamIO](
    https://github.com/milk-org/ImageStreamIO),
- - (todo) a [Gymnasium](https://gymnasium.farama.org/) formatted [environment](
-   https://gymnasium.farama.org/environments/third_party_environments/) 
-   for developping and testing reinforcement learning.
  - an experiment in linear algebra + statistics, optimal control/estimation, 
    python-wrapped-rust (using [PyO3](https://github.com/PyO3/pyo3)).
- - (todo) a performance evaluation tool - provided you can simulate your system
-   in `rao`.
 
 There are many things that `pyrao` *is not*, but most importantly:
  - `pyrao` is not an "end-to-end numerical simulation tool for AO" (see 
    [#assumptions])
  - `pyrao` is not an RTC in its own right, though it emulates some
    functionalities of one.
+
+`pyrao` is also suitable for the following tasks, but has not yet been developed for them:
+ - a [Gymnasium](https://gymnasium.farama.org/) formatted [environment](
+   https://gymnasium.farama.org/environments/third_party_environments/) 
+   for developping and testing reinforcement learning.
+ - a performance evaluation tool - provided you can simulate your system
+   in `rao`.
+
+If there are tasks you think `pyrao` could be suitable for and you would like to see them developed, [raise an issue](https://github.com/jcranney/pyrao/issues).
+
+### Installation
+Annoyingly, there is already a PyPI package named `pyrao`, so to install with
+pip, you should use: 
+```bash
+pip install rao
+```
+but then to import the package, use (as expected):
+```python
+import pyrao
+```
+
+### Usage
+The usage of this wrapper is very actively changing, based on my own needs.
+Currently, the main use-case for the Python wrapper is for rapid generation of
+interaction matrices and covariance matrices, both for linear simulations of AO
+systems, and for fitting of parameters by comparing measured and analytical
+matrices.
+
+For example usages, see the following:
+ - https://github.com/jcranney/mavis-saturations, a simulation for investigating the
+   effects of saturation and NCPAs in the MAVIS control scheme.
+ - https://github.com/jcranney/mavis-misreg, a simulated validation for the fitting
+   of system parameters using a synthetic interaction matrix.
 
 ### Assumptions
 We assume that everything in the AO loop is linear, and all sources of noise
