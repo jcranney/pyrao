@@ -1,3 +1,7 @@
+![PyPI - Version](https://img.shields.io/pypi/v/rao)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jcranney/pyrao/CI.yml)
+
+
 # pyrao
 `pyrao` is a few things:
  - a Python wrapper for [`rao`](https://github.com/jcranney/rao) package - a set
