@@ -11,6 +11,10 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+authors = [
+  { name="Jesse Cranney", email="jesse.cranney@anu.edu.au" },
+]
+description = "Python wrapper for RAO rust package"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
