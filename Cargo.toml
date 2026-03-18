@@ -1,6 +1,6 @@
 [package]
 name = "pyrao"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,11 +9,11 @@ name = "pyrao"
 crate-type = ["cdylib"]
 
 [dependencies]
-ndarray = "0.16.1"
-numpy = "0.25.0"
+ndarray = "0.17.2"
+numpy = "0.28.0"
 rao = "0.1.11"
 
 [dependencies.pyo3]
-version = "0.25.1"
+version = "0.28.2"
 features = ["abi3-py38"]
 

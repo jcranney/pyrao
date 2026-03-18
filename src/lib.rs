@@ -28,7 +28,7 @@ impl CoSampleable for VonKarmanLayers {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct SystemGeom {
     meas: Vec<Measurement>,
@@ -356,6 +356,25 @@ impl SystemGeom {
         .map(|(_,meas_lines)| meas_lines.clone())
         .collect();
 
+    }
+
+    fn reorder_meas(&mut self, order: Vec<usize>) {
+        let mut meas_new : Vec<Measurement> = vec![];
+        let mut meas_lines_new: Vec<Line> = vec![];
+        order.iter().for_each(|idx| {
+            meas_new.push(self.meas[*idx].clone());
+            meas_lines_new.push(self.meas_lines[*idx].clone());
+        });
+        self.meas = meas_new;
+        self.meas_lines = meas_lines_new;
+    }
+
+    fn reorder_com(&mut self, order: Vec<usize>) {
+        let mut com_new : Vec<Actuator> = vec![];
+        order.iter().for_each(|idx| {
+            com_new.push(self.com[*idx].clone());
+        });
+        self.com = com_new;
     }
 
     fn imat(&self) -> Vec<Vec<f64>> {
