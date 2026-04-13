@@ -1,6 +1,6 @@
 [package]
 name = "pyrao"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "Python wrapper for rao rust package."
 license = "MIT"
@@ -20,5 +20,5 @@ yaml_serde = "0.10.4"
 
 [dependencies.pyo3]
 version = "0.28.3"
-features = ["abi3-py38"]
+features = ["abi3-py38","experimental-inspect"]
 
