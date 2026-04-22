@@ -65,7 +65,7 @@ impl SystemGeom {
     }
 
     #[staticmethod]
-    fn load_yaml(filename: &str) -> Self{
+    fn load_yaml(filename: &str) -> Self {
         yaml_serde::from_str(&fs::read_to_string(filename).unwrap()).unwrap()
     }
 
