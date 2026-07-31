@@ -48,6 +48,9 @@ pub mod pyrao {
                 atmos,
             }
         }
+        fn expand(&self) -> ExpandedSystem {
+            self.into()
+        }
     }
 
     /// Physical telescope parameters that may be cloned between different AO systems
