@@ -267,21 +267,25 @@ pub mod pyrao {
     #[pymethods]
     impl Positions {
         #[staticmethod]
-        fn rect_grid(
-            npoints: usize,
-            width: f64,
-            height: f64,
-        ) -> Self {
-            Self::RectGrid { npoints, width, height }
+        fn rect_grid(npoints: usize, width: f64, height: f64) -> Self {
+            Self::RectGrid {
+                npoints,
+                width,
+                height,
+            }
         }
     }
 
     impl Positions {
         pub fn pitch(&self) -> (f64, f64) {
             match self {
-                Positions::RectGrid { npoints, width, height } => (
-                    width / (*npoints-1) as f64,
-                    height / (*npoints-1) as f64,
+                Positions::RectGrid {
+                    npoints,
+                    width,
+                    height,
+                } => (
+                    width / (*npoints - 1) as f64,
+                    height / (*npoints - 1) as f64,
                 ),
                 Positions::Explicit { pitch, .. } => *pitch,
             }
@@ -291,18 +295,24 @@ pub mod pyrao {
     impl From<&Positions> for Vec<Vec2D> {
         fn from(value: &Positions) -> Self {
             match value {
-                Positions::RectGrid { npoints, width, height } => {
+                Positions::RectGrid {
+                    npoints,
+                    width,
+                    height,
+                } => {
                     let x = Vec2D::linspace(
-                        &Vec2D::new(-width/2.0, 0.0),
-                        &Vec2D::new(width/2.0, 0.0),
+                        &Vec2D::new(-width / 2.0, 0.0),
+                        &Vec2D::new(width / 2.0, 0.0),
                         *npoints as u32,
                     );
                     let y = Vec2D::linspace(
-                        &Vec2D::new(0.0, -height/2.0),
-                        &Vec2D::new(0.0, height/2.0),
+                        &Vec2D::new(0.0, -height / 2.0),
+                        &Vec2D::new(0.0, height / 2.0),
                         *npoints as u32,
                     );
-                    x.into_iter().zip(y).map(|(x, y)| x + y).collect()
+                    x.into_iter()
+                        .flat_map(|x| y.clone().into_iter().map(move |y| x.clone() + y))
+                        .collect()
                 }
                 Positions::Explicit { pos, .. } => {
                     pos.iter().map(|(x, y)| Vec2D::new(*x, *y)).collect()
@@ -536,6 +546,14 @@ pub mod pyrao {
             System::load_yaml(filename)
         }
 
+        fn nmeas(&self) -> usize {
+            self.meas.len()
+        }
+
+        fn ncom(&self) -> usize {
+            self.com.len()
+        }
+
         // tmp.add_cov_layer(0.21575883, 60.0, 0.0, 10.0, 0.0);
         // tmp.add_cov_layer(0.76709884, 60.0, 1800.0, 10.0, 1.0);
         // tmp.add_cov_layer(0.59536035, 60.0, 3300.0, 12.0, -2.0);
@@ -548,7 +566,6 @@ pub mod pyrao {
                 layers: self.cov_model.clone(),
             }
         }
-
 
         fn filter_com(&mut self, valid_com: Vec<bool>) {
             System::filter_com(self, valid_com);
@@ -713,4 +730,3 @@ pub mod pyrao {
         }
     }
 }
-
