@@ -1,6 +1,6 @@
 [package]
 name = "pyrao"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 description = "Python wrapper for `rao` rust package."
 license = "MIT"
@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # ndarray = "0.17.2"
 # numpy = "0.29.0"
-rao = "0.2.1"
+rao = "0.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 yaml_serde = "0.10.4"
 

@@ -51,6 +51,15 @@ pub mod pyrao {
         fn expand(&self) -> ExpandedSystem {
             self.into()
         }
+        fn save_yaml(&self, filename: &str) {
+            fs::write(filename, yaml_serde::to_string(self).unwrap()).unwrap();
+        }
+
+        #[staticmethod]
+        fn load_yaml(filename: &str) -> Self {
+            yaml_serde::from_str(&fs::read_to_string(filename).unwrap()).unwrap()
+        }
+ 
     }
 
     /// Physical telescope parameters that may be cloned between different AO systems
