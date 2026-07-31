@@ -8,6 +8,9 @@ __pycache__/
 # C extensions
 *.so
 
+# stubs
+*.pyi
+
 # Distribution / packaging
 .Python
 .venv/
@@ -70,5 +73,3 @@ docs/_build/
 
 # Pyenv
 .python-version
-
-Cargo.lock
