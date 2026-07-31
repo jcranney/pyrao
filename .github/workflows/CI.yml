@@ -184,7 +184,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --generate-stubs --out dist
+          args: --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v6
         with:
