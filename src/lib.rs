@@ -59,7 +59,6 @@ pub mod pyrao {
         fn load_yaml(filename: &str) -> Self {
             yaml_serde::from_str(&fs::read_to_string(filename).unwrap()).unwrap()
         }
- 
     }
 
     /// Physical telescope parameters that may be cloned between different AO systems
@@ -147,18 +146,27 @@ pub mod pyrao {
         gsalt: Altitude,
         /// positions of centre of subapertures in pupil (metres)
         subap_pos: Positions,
+        /// number of points to sample along subap edges
+        subap_samples: usize,
         /// misregistration parameters
         misreg: MisReg,
     }
     #[pymethods]
     impl Wfs {
         #[new]
-        fn new(dir: (f64, f64), gsalt: Altitude, subap_pos: Positions, misreg: MisReg) -> Self {
+        fn new(
+            dir: (f64, f64),
+            gsalt: Altitude,
+            subap_pos: Positions,
+            subap_samples: usize,
+            misreg: MisReg,
+        ) -> Self {
             Self {
                 dir: Vec2D { x: dir.0, y: dir.0 },
                 gsalt,
                 subap_pos,
                 misreg,
+                subap_samples,
             }
         }
     }
@@ -170,6 +178,7 @@ pub mod pyrao {
                 gsalt,
                 subap_pos,
                 misreg,
+                subap_samples,
             } = value;
             let (dx, dy) = subap_pos.pitch();
             let centres: Vec<Vec2D> = subap_pos.into();
@@ -194,7 +203,7 @@ pub mod pyrao {
                             edge_length: dx,
                             edge_separation: dy,
                             gradient_axis: Vec2D::new(clocking.sin(), clocking.cos()),
-                            npoints: 1,
+                            npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
                         }
                     })
@@ -215,7 +224,7 @@ pub mod pyrao {
                             edge_length: dy,
                             edge_separation: dx,
                             gradient_axis: Vec2D::new(clocking.cos(), -clocking.sin()),
-                            npoints: 1,
+                            npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
                         }
                     })
@@ -563,6 +572,81 @@ pub mod pyrao {
             self.com.len()
         }
 
+        fn meas_coords(&self, layer_altitude: f64) -> Vec<MeasCoords> {
+            self.meas
+                .iter()
+                .map(|m| MeasCoords {
+                    centre: match m {
+                        rao::Measurement::Zero => (0.0, 0.0),
+                        rao::Measurement::Phase { line } => {
+                            let Vec2D { x, y } = line.clone().position_at_altitude(layer_altitude);
+                            (x, y)
+                        }
+                        rao::Measurement::SlopeTwoLine { .. } => todo!(),
+                        rao::Measurement::SlopeTwoEdge { central_line, .. } => {
+                            let Vec2D { x, y } =
+                                central_line.clone().position_at_altitude(layer_altitude);
+                            (x, y)
+                        }
+                    },
+                    corners: {
+                        match m {
+                            rao::Measurement::Zero => [(0.0, 0.0); 4],
+                            rao::Measurement::Phase { line } => {
+                                let Vec2D { x, y } =
+                                    line.clone().position_at_altitude(layer_altitude);
+                                [(x, y); 4]
+                            }
+                            rao::Measurement::SlopeTwoLine { .. } => todo!(),
+                            rao::Measurement::SlopeTwoEdge {
+                                central_line,
+                                edge_length,
+                                edge_separation,
+                                altitude,
+                                gradient_axis,
+                                ..
+                            } => {
+                                let pos_altitude =
+                                    &central_line.clone().position_at_altitude(layer_altitude);
+                                [
+                                    pos_altitude
+                                        + layer_altitude / altitude
+                                            * (gradient_axis * (edge_separation / 2.0)
+                                                + gradient_axis.ortho() * (edge_length / 2.0)),
+                                    pos_altitude
+                                        - layer_altitude / altitude
+                                            * (gradient_axis * (edge_separation / 2.0)
+                                                + gradient_axis.ortho() * (edge_length / 2.0)),
+                                    pos_altitude
+                                        - layer_altitude / altitude
+                                            * (gradient_axis * (edge_separation / 2.0)
+                                                - gradient_axis.ortho() * (edge_length / 2.0)),
+                                    pos_altitude
+                                        + layer_altitude / altitude
+                                            * (gradient_axis * (edge_separation / 2.0)
+                                                - gradient_axis.ortho() * (edge_length / 2.0)),
+                                ]
+                                .map(|p| {
+                                    let Vec2D { x, y } = p;
+                                    (x, y)
+                                })
+                            }
+                        }
+                    },
+                })
+                .collect()
+        }
+
+        fn actu_coords(&self) -> Vec<ActuCoords> {
+            self.com.iter().map(|a| {
+                match a {
+                    Actuator::Zero => ActuCoords {pos: (0.0,0.0), alt: 0.0},
+                    Actuator::Gaussian { position, .. } => ActuCoords { pos: (position.x, position.y), alt: position.z },
+                    Actuator::TipTilt { .. } => ActuCoords { pos: (0.0,0.0), alt: 0.0 },
+                }
+            }).collect()
+        }
+
         // tmp.add_cov_layer(0.21575883, 60.0, 0.0, 10.0, 0.0);
         // tmp.add_cov_layer(0.76709884, 60.0, 1800.0, 10.0, 1.0);
         // tmp.add_cov_layer(0.59536035, 60.0, 3300.0, 12.0, -2.0);
@@ -736,6 +820,40 @@ pub mod pyrao {
                 .flattened_array(),
                 None => (0..self.meas_lines().len()).map(|_| 1.0).collect(),
             }
+        }
+    }
+
+    #[pyclass(from_py_object)]
+    #[derive(Clone, PartialEq, Serialize, Deserialize)]
+    struct MeasCoords {
+        centre: (f64, f64),
+        corners: [(f64, f64); 4],
+    }
+
+    #[pymethods]
+    impl MeasCoords {
+        fn centre(&self) -> (f64, f64) {
+            self.centre
+        }
+        fn corners(&self) -> [(f64, f64); 4] {
+            self.corners
+        }
+    }
+
+        #[pyclass(from_py_object)]
+    #[derive(Clone, PartialEq, Serialize, Deserialize)]
+    struct ActuCoords {
+        pos: (f64, f64),
+        alt: f64
+    }
+
+    #[pymethods]
+    impl ActuCoords {
+        fn pos(&self) -> (f64, f64) {
+            self.pos
+        }
+        fn alt(&self) -> f64 {
+            self.alt
         }
     }
 }
