@@ -136,6 +136,44 @@ pub mod pyrao {
         }
     }
 
+    #[pyclass(from_py_object)]
+    #[derive(Clone, PartialEq, Serialize, Deserialize)]
+    struct Spiders {
+        arms: Vec<((f64, f64), (f64, f64))>,
+        thickness: f64,
+    }
+    #[pymethods]
+    impl Spiders {
+        #[new]
+        fn new(arms: Vec<((f64, f64), (f64, f64))>, thickness: f64) -> Self {
+            Self { thickness, arms }
+        }
+    }
+
+    #[pyclass(from_py_object)]
+    #[derive(Clone, PartialEq, Serialize, Deserialize)]
+    struct Pupil {
+        pupil: rao::Pupil,
+    }
+    #[pymethods]
+    impl Pupil {
+        #[new]
+        fn new(teldiam: f64, cobs: f64, spiders: Spiders) -> Self {
+            Self {
+                pupil: rao::Pupil {
+                    rad_outer: teldiam / 2.0,
+                    rad_inner: teldiam / 2.0 * cobs,
+                    spider_thickness: spiders.thickness,
+                    spiders: spiders
+                        .arms
+                        .into_iter()
+                        .map(|v| (Vec2D { x: v.0.0, y: v.0.1 }, Vec2D { x: v.1.0, y: v.1.1 }))
+                        .collect(),
+                },
+            }
+        }
+    }
+
     /// A single wavefront sensor. A collection of measurements.
     #[pyclass(from_py_object)]
     #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +188,8 @@ pub mod pyrao {
         subap_samples: usize,
         /// misregistration parameters
         misreg: MisReg,
+        /// pupil function
+        pupil: Pupil,
     }
     #[pymethods]
     impl Wfs {
@@ -159,6 +199,7 @@ pub mod pyrao {
             gsalt: Altitude,
             subap_pos: Positions,
             subap_samples: usize,
+            pupil: Pupil,
             misreg: MisReg,
         ) -> Self {
             Self {
@@ -167,6 +208,7 @@ pub mod pyrao {
                 subap_pos,
                 misreg,
                 subap_samples,
+                pupil,
             }
         }
     }
@@ -179,6 +221,7 @@ pub mod pyrao {
                 subap_pos,
                 misreg,
                 subap_samples,
+                pupil,
             } = value;
             let (dx, dy) = subap_pos.pitch();
             let centres: Vec<Vec2D> = subap_pos.into();
@@ -198,13 +241,14 @@ pub mod pyrao {
                         let y0: f64 =
                             (-p.x * clocking.sin() + p.y * clocking.cos()) * zoom + delta.1;
                         let l = Line::new(x0, dir.x, y0, dir.y);
-                        rao::Measurement::SlopeTwoEdge {
+                        rao::Measurement::SlopePairwise {
                             central_line: l.clone(),
                             edge_length: dx,
                             edge_separation: dy,
                             gradient_axis: Vec2D::new(clocking.sin(), clocking.cos()),
                             npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
+                            pupil_mask: pupil.pupil.clone(),
                         }
                     })
                     .collect::<Vec<rao::Measurement>>(),
@@ -219,13 +263,14 @@ pub mod pyrao {
                         let y0: f64 =
                             (-p.x * clocking.sin() + p.y * clocking.cos()) * zoom + delta.1;
                         let l = Line::new(x0, dir.x, y0, dir.y);
-                        rao::Measurement::SlopeTwoEdge {
+                        rao::Measurement::SlopePairwise {
                             central_line: l.clone(),
                             edge_length: dy,
                             edge_separation: dx,
                             gradient_axis: Vec2D::new(clocking.cos(), -clocking.sin()),
                             npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
+                            pupil_mask: pupil.pupil.clone(),
                         }
                     })
                     .collect::<Vec<rao::Measurement>>(),
@@ -239,10 +284,11 @@ pub mod pyrao {
             let meas: Vec<Measurement> = value.into();
             meas.iter()
                 .map(|m| match m {
-                    rao::Measurement::Zero => Line::new_on_axis(0.0, 0.0),
-                    rao::Measurement::Phase { line } => line.clone(),
-                    rao::Measurement::SlopeTwoLine { .. } => todo!(),
-                    rao::Measurement::SlopeTwoEdge { central_line, .. } => central_line.clone(),
+                    Measurement::Zero => Line::new_on_axis(0.0, 0.0),
+                    Measurement::Phase { line } => line.clone(),
+                    Measurement::SlopeTwoLine { .. } => todo!(),
+                    Measurement::SlopeTwoEdge { central_line, .. }
+                    | Measurement::SlopePairwise { central_line, .. } => central_line.clone(),
                 })
                 .collect()
         }
@@ -473,11 +519,11 @@ pub mod pyrao {
     impl From<&CompactSystem> for ExpandedSystem {
         fn from(value: &CompactSystem) -> Self {
             let CompactSystem {
-                telescope,
                 dm,
                 wfs,
                 ctrl,
                 atmos,
+                ..
             } = value;
             let meas = wfs
                 .iter()
@@ -488,20 +534,13 @@ pub mod pyrao {
                 .iter()
                 .flat_map::<Vec<Actuator>, _>(|d| d.into())
                 .collect();
-            let Telescope { teldiam, cobs } = telescope;
-            let pupil = Pupil {
-                rad_outer: *teldiam / 2.0,
-                rad_inner: cobs * teldiam / 2.0,
-                spider_thickness: 0.0,
-                spiders: vec![],
-            };
             Self {
                 meas,
                 phi: vec![],
                 ts: ctrl.into(),
                 com,
                 cov_model: atmos.into(),
-                pupil: Some(pupil),
+                pupil: None,
                 meas_lines,
                 simul_dt: 0.0,
                 meas_dt: ctrl.dt,
@@ -548,9 +587,6 @@ pub mod pyrao {
             &mut self.meas_lines
         }
 
-        fn pupil(&self) -> Option<&Pupil> {
-            self.pupil.as_ref()
-        }
     }
 
     #[pymethods]
@@ -579,7 +615,7 @@ pub mod pyrao {
                     let centre;
                     let corners;
                     match m {
-                        rao::Measurement::Zero => {
+                        Measurement::Zero => {
                             centre = (0.0, 0.0);
                             corners = [(0.0, 0.0); 4];
                         }
@@ -595,6 +631,14 @@ pub mod pyrao {
                             edge_separation,
                             altitude,
                             gradient_axis,
+                            ..
+                        }
+                        | Measurement::SlopePairwise {
+                            central_line,
+                            edge_length,
+                            edge_separation,
+                            gradient_axis,
+                            altitude,
                             ..
                         } => {
                             let Vec2D { x, y } =
@@ -671,10 +715,6 @@ pub mod pyrao {
             System::reorder_com(self, order);
         }
 
-        fn p_meas(&self) -> Vec<f64> {
-            System::pmeas(self)
-        }
-
         fn c_meas_meas(&self) -> (Vec<f64>, (usize, usize)) {
             let layers = self.layers();
             let c_meas_meas = CovMat::new(&self.meas, &self.meas, &layers, 0.0);
@@ -731,12 +771,6 @@ pub mod pyrao {
             let x = IMat::new(&self.phi, &self.com);
             (x.flattened_array(), (x.nrows(), x.ncols()))
         }
-        fn p_phi(&self) -> Vec<f64> {
-            match &self.pupil {
-                Some(pupil) => IMat::new(&self.phi, std::slice::from_ref(pupil)).flattened_array(),
-                None => (0..self.phi.len()).map(|_| 1.0).collect(),
-            }
-        }
     }
 
     trait System: Serialize + DeserializeOwned {
@@ -754,7 +788,6 @@ pub mod pyrao {
         fn meas_mut(&mut self) -> &mut Vec<Measurement>;
         fn meas_lines(&self) -> &Vec<Line>;
         fn meas_lines_mut(&mut self) -> &mut Vec<Line>;
-        fn pupil(&self) -> Option<&Pupil>;
 
         fn filter_com(&mut self, valid_com: Vec<bool>) {
             *self.com_mut() = self
@@ -800,21 +833,6 @@ pub mod pyrao {
                 com_new.push(self.com()[*idx].clone());
             });
             *self.com_mut() = com_new;
-        }
-
-        fn pmeas(&self) -> Vec<f64> {
-            match self.pupil() {
-                Some(pupil) => IMat::new(
-                    &self
-                        .meas_lines()
-                        .iter()
-                        .flat_map(|ell| vec![Measurement::Phase { line: ell.clone() }])
-                        .collect::<Vec<Measurement>>(),
-                    std::slice::from_ref(pupil),
-                )
-                .flattened_array(),
-                None => (0..self.meas_lines().len()).map(|_| 1.0).collect(),
-            }
         }
     }
 
