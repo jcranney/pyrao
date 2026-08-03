@@ -575,76 +575,71 @@ pub mod pyrao {
         fn meas_coords(&self, layer_altitude: f64) -> Vec<MeasCoords> {
             self.meas
                 .iter()
-                .map(|m| MeasCoords {
-                    centre: match m {
-                        rao::Measurement::Zero => (0.0, 0.0),
-                        rao::Measurement::Phase { line } => {
-                            let Vec2D { x, y } = line.clone().position_at_altitude(layer_altitude);
-                            (x, y)
+                .map(|m| {
+                    let centre;
+                    let corners;
+                    match m {
+                        rao::Measurement::Zero => {
+                            centre = (0.0, 0.0);
+                            corners = [(0.0, 0.0); 4];
                         }
-                        rao::Measurement::SlopeTwoLine { .. } => todo!(),
-                        rao::Measurement::SlopeTwoEdge { central_line, .. } => {
+                        Measurement::Phase { line } => {
+                            let Vec2D { x, y } = line.clone().position_at_altitude(layer_altitude);
+                            centre = (x, y);
+                            corners = [(x, y); 4]
+                        }
+                        Measurement::SlopeTwoLine { .. } => todo!(),
+                        Measurement::SlopeTwoEdge {
+                            central_line,
+                            edge_length,
+                            edge_separation,
+                            altitude,
+                            gradient_axis,
+                            ..
+                        } => {
                             let Vec2D { x, y } =
                                 central_line.clone().position_at_altitude(layer_altitude);
-                            (x, y)
+                            centre = (x, y);
+                            let pos_altitude =
+                                &central_line.clone().position_at_altitude(layer_altitude);
+                            let h_scale = 1.0 - layer_altitude / altitude;
+                            let dx = &(gradient_axis * (edge_separation / 2.0));
+                            let dy = &(gradient_axis.ortho() * (edge_length / 2.0));
+                            corners = [
+                                pos_altitude + h_scale * (dx + dy),
+                                pos_altitude + h_scale * (-1.0 * dx + dy),
+                                pos_altitude + h_scale * (-1.0 * dx - dy),
+                                pos_altitude + h_scale * (dx - dy),
+                            ]
+                            .map(|p| {
+                                let Vec2D { x, y } = p;
+                                (x, y)
+                            });
                         }
-                    },
-                    corners: {
-                        match m {
-                            rao::Measurement::Zero => [(0.0, 0.0); 4],
-                            rao::Measurement::Phase { line } => {
-                                let Vec2D { x, y } =
-                                    line.clone().position_at_altitude(layer_altitude);
-                                [(x, y); 4]
-                            }
-                            rao::Measurement::SlopeTwoLine { .. } => todo!(),
-                            rao::Measurement::SlopeTwoEdge {
-                                central_line,
-                                edge_length,
-                                edge_separation,
-                                altitude,
-                                gradient_axis,
-                                ..
-                            } => {
-                                let pos_altitude =
-                                    &central_line.clone().position_at_altitude(layer_altitude);
-                                [
-                                    pos_altitude
-                                        + layer_altitude / altitude
-                                            * (gradient_axis * (edge_separation / 2.0)
-                                                + gradient_axis.ortho() * (edge_length / 2.0)),
-                                    pos_altitude
-                                        - layer_altitude / altitude
-                                            * (gradient_axis * (edge_separation / 2.0)
-                                                + gradient_axis.ortho() * (edge_length / 2.0)),
-                                    pos_altitude
-                                        - layer_altitude / altitude
-                                            * (gradient_axis * (edge_separation / 2.0)
-                                                - gradient_axis.ortho() * (edge_length / 2.0)),
-                                    pos_altitude
-                                        + layer_altitude / altitude
-                                            * (gradient_axis * (edge_separation / 2.0)
-                                                - gradient_axis.ortho() * (edge_length / 2.0)),
-                                ]
-                                .map(|p| {
-                                    let Vec2D { x, y } = p;
-                                    (x, y)
-                                })
-                            }
-                        }
-                    },
+                    }
+                    MeasCoords { centre, corners }
                 })
                 .collect()
         }
 
         fn actu_coords(&self) -> Vec<ActuCoords> {
-            self.com.iter().map(|a| {
-                match a {
-                    Actuator::Zero => ActuCoords {pos: (0.0,0.0), alt: 0.0},
-                    Actuator::Gaussian { position, .. } => ActuCoords { pos: (position.x, position.y), alt: position.z },
-                    Actuator::TipTilt { .. } => ActuCoords { pos: (0.0,0.0), alt: 0.0 },
-                }
-            }).collect()
+            self.com
+                .iter()
+                .map(|a| match a {
+                    Actuator::Zero => ActuCoords {
+                        pos: (0.0, 0.0),
+                        alt: 0.0,
+                    },
+                    Actuator::Gaussian { position, .. } => ActuCoords {
+                        pos: (position.x, position.y),
+                        alt: position.z,
+                    },
+                    Actuator::TipTilt { .. } => ActuCoords {
+                        pos: (0.0, 0.0),
+                        alt: 0.0,
+                    },
+                })
+                .collect()
         }
 
         // tmp.add_cov_layer(0.21575883, 60.0, 0.0, 10.0, 0.0);
@@ -840,11 +835,11 @@ pub mod pyrao {
         }
     }
 
-        #[pyclass(from_py_object)]
+    #[pyclass(from_py_object)]
     #[derive(Clone, PartialEq, Serialize, Deserialize)]
     struct ActuCoords {
         pos: (f64, f64),
-        alt: f64
+        alt: f64,
     }
 
     #[pymethods]
