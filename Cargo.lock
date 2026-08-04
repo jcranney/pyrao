@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "pyrao"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "pyo3",
  "rao",

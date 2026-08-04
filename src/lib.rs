@@ -241,14 +241,14 @@ pub mod pyrao {
                         let y0: f64 =
                             (-p.x * clocking.sin() + p.y * clocking.cos()) * zoom + delta.1;
                         let l = Line::new(x0, dir.x, y0, dir.y);
-                        rao::Measurement::SlopePairwise {
+                        rao::Measurement::SlopeTwoEdge {
                             central_line: l.clone(),
                             edge_length: dx,
                             edge_separation: dy,
                             gradient_axis: Vec2D::new(clocking.sin(), clocking.cos()),
                             npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
-                            pupil_mask: pupil.pupil.clone(),
+                            // pupil_mask: pupil.pupil.clone(),
                         }
                     })
                     .collect::<Vec<rao::Measurement>>(),
@@ -263,14 +263,14 @@ pub mod pyrao {
                         let y0: f64 =
                             (-p.x * clocking.sin() + p.y * clocking.cos()) * zoom + delta.1;
                         let l = Line::new(x0, dir.x, y0, dir.y);
-                        rao::Measurement::SlopePairwise {
+                        rao::Measurement::SlopeTwoEdge {
                             central_line: l.clone(),
                             edge_length: dy,
                             edge_separation: dx,
                             gradient_axis: Vec2D::new(clocking.cos(), -clocking.sin()),
                             npoints: *subap_samples as u32,
                             altitude: gsalt.into(),
-                            pupil_mask: pupil.pupil.clone(),
+                            // pupil_mask: pupil.pupil.clone(),
                         }
                     })
                     .collect::<Vec<rao::Measurement>>(),

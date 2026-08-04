@@ -1,6 +1,6 @@
 [package]
 name = "pyrao"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2024"
 description = "Python wrapper for `rao` rust package."
 license = "MIT"
