@@ -312,6 +312,15 @@ pub mod pyrao {
                 zoom,
             }
         }
+
+        #[staticmethod]
+        fn ideal() -> Self {
+            Self {
+                delta: (0.0, 0.0),
+                clocking: 0.0,
+                zoom: 1.0,
+            }
+        }
     }
 
     /// Common positions
@@ -586,7 +595,6 @@ pub mod pyrao {
         fn meas_lines_mut(&mut self) -> &mut Vec<Line> {
             &mut self.meas_lines
         }
-
     }
 
     #[pymethods]
